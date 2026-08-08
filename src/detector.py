@@ -1,111 +1,159 @@
-"""
-detector.py
------------
-Wraps the YOLOv8 model: loading it, running inference on a frame, and
-drawing the results (boxes + labels + confidence) back onto that frame.
+"""detector.py
+-------------
+Loads a YOLO model and runs inference on individual frames.
 
-We use "yolov8n.pt" (the "nano" version) because it's the smallest and
-fastest YOLOv8 model - a good fit for real-time webcam inference on a
-CPU, while still being reasonably accurate. Ultralytics downloads this
-weights file automatically the first time it's used.
+This project uses a YOLO11s checkpoint fine-tuned on the VisDrone dataset
+(``models/visdrone_yol11s.pt``).  The VisDrone model was chosen because
+COCO-pretrained weights fail on aerial/overhead parking footage — COCO cars
+are photographed at street level (side/front views) whereas a parking-lot
+camera sees only car rooftops, which the COCO model misclassifies as kitchen
+appliances (ovens, bowls, etc.).
+
+VisDrone class IDs used by this model:
+    3 = car   4 = van   5 = truck   8 = bus
+These are defined in utils.VEHICLE_CLASS_IDS and passed to the model so that
+NMS is restricted to vehicle classes only (faster and cleaner than filtering
+in Python afterwards).
+
+Single Responsibility: this file owns exactly one thing — loading and
+running the YOLO model.
 """
 
-import cv2
+from __future__ import annotations
+
+import logging
+
+import numpy as np
 from ultralytics import YOLO
 
+from utils import VEHICLE_CLASS_IDS
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
 
 class ModelLoadError(Exception):
-    """Raised when the YOLO model fails to load."""
-    pass
+    """Raised when the YOLO model cannot be loaded."""
 
+
+# ---------------------------------------------------------------------------
+# Detection result type
+# ---------------------------------------------------------------------------
+
+# Each detected vehicle is a plain dict so callers never import ultralytics:
+#   {
+#     "bbox":       (x1, y1, x2, y2),   # ints, pixel coordinates
+#     "class_id":   int,                 # VisDrone class index
+#     "class_name": str,                 # e.g. "car", "van"
+#     "confidence": float,               # 0.0 – 1.0
+#   }
+DetectionDict = dict[str, object]
+
+# Default model path — relative to the project root (where main.py is run from).
+DEFAULT_MODEL_PATH = "models/visdrone_yol11s.pt"
+
+
+# ---------------------------------------------------------------------------
+# ObjectDetector
+# ---------------------------------------------------------------------------
 
 class ObjectDetector:
-    """
-    Loads a YOLOv8 model once, then repeatedly detects objects in frames.
+    """Loads a YOLO model once and runs vehicle inference on demand.
 
-    Keeping the model loaded as an instance attribute (instead of reloading
-    it every frame) is what makes real-time performance possible - model
-    loading is slow, inference on an already-loaded model is fast.
+    Args:
+        model_path: Path to the YOLO weights file.
+                    Defaults to the VisDrone YOLO11s checkpoint.
+        confidence_threshold: Minimum confidence to accept a detection.
+                    0.25 works well for the VisDrone-trained model on
+                    overhead parking footage.
     """
 
-    def __init__(self, model_path: str = "models/yolov8n.pt", confidence_threshold: float = 0.5):
+    def __init__(
+        self,
+        model_path: str = DEFAULT_MODEL_PATH,
+        confidence_threshold: float = 0.25,
+    ) -> None:
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
-        self.model = self._load_model()
+        self.model: YOLO = self._load_model()
+        logger.info(
+            "YOLO model loaded: %s (conf≥%.2f)",
+            model_path,
+            confidence_threshold,
+        )
 
     def _load_model(self) -> YOLO:
-        """Loads the YOLO model, wrapping any failure in a clear error."""
+        """Load YOLO weights, raising ModelLoadError on failure.
+
+        Returns:
+            Loaded ``YOLO`` model instance.
+
+        Raises:
+            ModelLoadError: If the weights file is missing or cannot be read.
+        """
         try:
-            model = YOLO(self.model_path)
+            return YOLO(self.model_path)
         except Exception as exc:
             raise ModelLoadError(
-                f"Failed to load YOLO model '{self.model_path}'. "
-                f"Make sure you have an internet connection (to download "
-                f"the weights the first time) and that 'ultralytics' is "
-                f"installed correctly.\nOriginal error: {exc}"
+                f"Failed to load YOLO model '{self.model_path}'.\n"
+                "Check that the weights file exists at the specified path.\n"
+                f"  → {exc}"
             ) from exc
-        return model
 
-    def detect(self, frame):
-        """
-        Runs object detection on a single frame.
+    def detect(self, frame: np.ndarray):
+        """Run inference on one frame and return raw Ultralytics Results.
 
-        Returns the raw Ultralytics "Results" object, which contains all
-        detected boxes, their classes, and confidence scores. We keep this
-        separate from drawing so the caller (main.py) could, in theory,
-        use the raw results for something other than drawing (e.g. logging,
-        counting objects, triggering alerts, etc.).
-        """
-        # verbose=False stops Ultralytics from printing a log line per frame.
-        results = self.model(frame, conf=self.confidence_threshold, verbose=False)
-        return results[0]  # a single frame in -> a single Results object out
+        ``classes=`` restricts YOLO's NMS step to vehicle classes only,
+        avoiding unnecessary scoring of pedestrians, cyclists, etc.
+        ``imgsz=640`` is explicit for deterministic, reproducible behaviour.
 
-    def draw_detections(self, frame, results):
-        """
-        Draws bounding boxes, class names, and confidence scores onto the
-        frame based on the detection results.
+        Args:
+            frame: BGR uint8 image from OpenCV.
 
-        Returns the same frame, modified in place, for convenience.
+        Returns:
+            Ultralytics ``Results`` object for this frame.
         """
+        results = self.model(
+            frame,
+            conf=self.confidence_threshold,
+            classes=sorted(VEHICLE_CLASS_IDS),  # VisDrone: car=3, van=4, truck=5, bus=8
+            imgsz=640,
+            verbose=False,
+        )
+        return results[0]
+
+    def detect_vehicles(self, frame: np.ndarray) -> list[DetectionDict]:
+        """Run inference and return vehicle detections as plain dicts.
+
+        Args:
+            frame: BGR uint8 image from OpenCV.
+
+        Returns:
+            List of detection dicts; empty list if no vehicles found.
+            Keys per dict: ``bbox``, ``class_id``, ``class_name``,
+            ``confidence``.
+        """
+        results = self.detect(frame)
+        vehicles: list[DetectionDict] = []
+
         for box in results.boxes:
-            # --- Extract box coordinates ---
-            # xyxy = (x1, y1, x2, y2) = top-left and bottom-right corners.
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-
-            # --- Extract class name and confidence ---
             class_id = int(box.cls[0])
-            class_name = self.model.names[class_id]
-            confidence = float(box.conf[0])
 
-            # --- Draw the bounding box ---
-            color = (0, 255, 0)  # green, in BGR (OpenCV's color order)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness=2)
+            # Defensive guard: detect() already filters via classes=,
+            # but this makes detect_vehicles() safe if called independently.
+            if class_id not in VEHICLE_CLASS_IDS:
+                continue
 
-            # --- Draw the label (class name + confidence) above the box ---
-            label = f"{class_name} {confidence:.2f}"
-            (text_w, text_h), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-            )
+            x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())
+            vehicles.append({
+                "bbox":       (x1, y1, x2, y2),
+                "class_id":   class_id,
+                "class_name": self.model.names[class_id],
+                "confidence": float(box.conf[0]),
+            })
 
-            # Background rectangle behind the text so it's readable on
-            # any background color.
-            cv2.rectangle(
-                frame,
-                (x1, y1 - text_h - 10),
-                (x1 + text_w + 4, y1),
-                color,
-                thickness=-1,  # -1 fills the rectangle
-            )
-            cv2.putText(
-                frame,
-                label,
-                (x1 + 2, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 0),  # black text for contrast against the green box
-                2,
-                cv2.LINE_AA,
-            )
-
-        return frame
+        logger.debug("Detected %d vehicle(s) in frame", len(vehicles))
+        return vehicles

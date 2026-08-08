@@ -1,191 +1,256 @@
-# Real-Time Object Detection with YOLOv8 and OpenCV
+# Smart Parking Occupancy Monitoring System
 
-A beginner-friendly, interview-ready computer vision project that detects objects
-in a live webcam feed (or a video file) in real time, drawing bounding boxes,
-class labels, confidence scores, and an FPS counter on screen.
+A portfolio-quality computer vision project that monitors parking lot occupancy in real time from a fixed overhead camera, using a YOLO11s model fine-tuned on the VisDrone aerial dataset.
 
-```
-[Webcam / Video] --> [OpenCV frame capture] --> [YOLOv8 inference] --> [Draw boxes + labels] --> [Display]
-```
+![System output showing 69 parking spots with 53 occupied (77%) at 5.5 FPS](assets/demo_frame.png)
 
 ---
 
-## 1. Project Structure
+## Overview
 
-```
-yolo-object-detection/
-├── src/
-│   ├── main.py        # Entry point - ties everything together, runs the main loop
-│   ├── detector.py     # Loads YOLOv8 model, runs inference, draws detections
-│   ├── camera.py       # Wraps OpenCV VideoCapture (webcam or video file)
-│   └── utils.py        # FPS counter + small drawing helper
-├── requirements.txt
-└── README.md
-```
+The system processes video from a fixed elevated camera, detects vehicles using YOLO11s, and compares each vehicle's bounding box against 69 manually defined parking zones using Intersection-over-Union (IoU). Each zone is independently tracked with temporal hysteresis to prevent flickering. Results are displayed in real time and logged to CSV.
 
-Only 4 Python files, each with a single clear responsibility:
+---
 
-| File | Responsibility |
+## Problem Statement
+
+Standard COCO-pretrained YOLO models are trained on street-level photography where vehicles are seen from the side or front. An overhead parking-lot camera sees only car rooftops — a fundamentally different visual perspective. When tested, a COCO-pretrained YOLOv8s model classified parked cars as kitchen appliances (ovens, sinks, refrigerators) at confidence 0.05–0.21, producing zero usable vehicle detections.
+
+---
+
+## Why COCO YOLO Was Not Suitable
+
+COCO's vehicle annotations come from street-level images. The model's classification head learns to associate the "car" class with a distinctive front grille, side profile, and windscreen. Viewed from directly above, a car is just a rectangular roof with no visible grille or windows — the model finds no match to its training data and falls back to the nearest visually similar COCO class (boxy rectangles → kitchen appliances).
+
+---
+
+## Solution
+
+Replace the COCO-pretrained model with a YOLO11s checkpoint fine-tuned on **VisDrone2019-DET**, a large-scale aerial imagery dataset captured from drone-mounted cameras. The VisDrone-trained model already understands the overhead perspective, recognising car rooftops as cars with high confidence.
+
+---
+
+## Model Selection
+
+| Candidate | Result |
 |---|---|
-| `camera.py` | Own the video source (open, read frames, release, handle errors) |
-| `detector.py` | Own the model (load, run inference, draw results) |
-| `utils.py` | Small stateless/self-contained helpers (FPS math, text overlay) |
-| `main.py` | Wire the above together into a runnable program |
+| YOLOv8s (COCO pretrained) | Fails — classifies cars as kitchen appliances |
+| RT-DETR (COCO) | Worst aerial performance (21.7% mAP on VisDrone); slow on CPU |
+| YOLO11n (VisDrone) | Works; ~20 FPS CPU; slightly lower accuracy |
+| **YOLO11s (VisDrone)** | **Selected — best accuracy/CPU-speed balance** |
+| YOLOv9e (VisDrone) | Best accuracy but >400ms CPU latency; impractical |
 
-This is intentionally **not over-engineered** — no config files, no plugin
-systems, no factories. Just three focused classes/modules and a script that
-uses them, which is exactly what a beginner (or an interviewer) can read
-top-to-bottom in a few minutes.
+### Why YOLO11s
+
+YOLO11s fine-tuned on VisDrone achieves **72.4% mAP@50 for the car class** on aerial imagery. It runs at approximately 5–6 FPS on a CPU-only machine (AMD Ryzen 5 7535HS), which is sufficient for monitoring stationary parked vehicles. Larger models (YOLOv9e) offer higher accuracy but are impractical without a GPU.
+
+### VisDrone Dataset
+
+VisDrone2019-DET is a large-scale aerial detection benchmark created by Tianjin University. It contains 8,629 drone-captured images with 10 annotated classes including car, van, truck, and bus — exactly the overhead perspective needed. The dataset is publicly available for academic use.
+
+### Important: We Did Not Train This Model
+
+The checkpoint (`models/visdrone_yol11s.pt`) is a publicly available pre-trained model fine-tuned on VisDrone. We downloaded it and use it directly. No training was performed in this project.
 
 ---
 
-## 2. Installation
+## System Architecture
 
-### Prerequisites
-- Python 3.9+
-- A working webcam (optional — you can run on a video file instead)
+```
+Video / Camera
+      │
+      ▼
+  camera.py          — frame capture and release
+      │
+      ▼
+  detector.py        — YOLO11s inference → vehicle bounding boxes
+      │
+      ▼
+  parking.py         — IoU matching → FREE / OCCUPIED / UNKNOWN per spot
+      │
+      ├──▶ utils.py  — drawing helpers and HUD overlay
+      │
+      ▼
+  logger.py          — CSV occupancy logging
+      │
+      ▼
+  main.py            — orchestration, CLI, display loop
+```
 
-### Steps
+---
+
+## Project Structure
+
+```
+smart-parking/
+├── src/
+│   ├── main.py              # Entry point
+│   ├── detector.py          # YOLO inference
+│   ├── parking.py           # Occupancy logic
+│   ├── camera.py            # Video capture
+│   ├── utils.py             # Constants, colours, HUD drawing
+│   └── logger.py            # CSV logging
+├── tools/
+│   └── define_slots.py      # Interactive parking zone calibration tool
+├── models/
+│   └── visdrone_yol11s.pt   # VisDrone-trained YOLO11s weights (~19 MB)
+├── assets/
+│   ├── parking_video.mp4    # Test footage
+│   └── slots.json           # 69 calibrated parking zone definitions
+├── logs/                    # CSV occupancy logs (generated at runtime)
+├── requirements.txt
+├── .gitignore
+├── README.md
+├── PROJECT_DOCUMENTATION.md
+└── MODEL_SELECTION.md
+```
+
+---
+
+## Installation
 
 ```bash
-# 1. Clone / download the project, then move into it
-cd yolo-object-detection
+# 1. Clone the repository
+git clone https://github.com/your-username/smart-parking.git
+cd smart-parking
 
-# 2. (Recommended) create a virtual environment
-python -m venv venv
-source venv/bin/activate      # On Windows: venv\Scripts\activate
+# 2. Create a virtual environment
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
 ```
 
-`ultralytics` will automatically download the YOLOv8 nano weights
-(`yolov8n.pt`, ~6 MB) the first time you run the app — no manual download
-needed, as long as you have an internet connection for that first run.
-
 ---
 
-## 3. Usage
-
-Run with the default webcam:
+## How to Run
 
 ```bash
-cd src
-python main.py
+# Run on the test video (default settings)
+python src/main.py --source assets/parking_video.mp4
+
+# Run on a live webcam
+python src/main.py --source 0
+
+# Override the model or confidence threshold
+python src/main.py \
+  --source assets/parking_video.mp4 \
+  --model models/visdrone_yol11s.pt \
+  --confidence 0.25
+
+# Custom slot file or log directory
+python src/main.py \
+  --source assets/parking_video.mp4 \
+  --slots assets/slots.json \
+  --log-dir logs \
+  --log-interval 30
 ```
 
-Other options:
+Press **Q** in the display window (or **Ctrl-C** in the terminal) to quit cleanly.
+
+---
+
+## Parking Slot Configuration
+
+Parking zones are defined once using the interactive calibration tool:
 
 ```bash
-# Use a different webcam (e.g. an external USB camera)
-python main.py --source 1
-
-# Run on a video file instead of a live camera
-python main.py --source ../videos/sample.mp4
-
-# Use a bigger/more accurate YOLOv8 model (slower)
-python main.py --model yolov8s.pt
-
-# Only show detections the model is at least 70% confident about
-python main.py --confidence 0.7
+python tools/define_slots.py --source assets/parking_video.mp4
 ```
 
-Press **`q`** in the video window (or **Ctrl+C** in the terminal) to quit.
-The app always releases the camera and closes windows cleanly, even if it
-was interrupted.
+Draw rectangles over each bay. Press **S** to save. The tool writes `assets/slots.json`, which is read automatically at startup.
+
+`slots.json` format:
+```json
+[
+  {"id": "A1", "bbox": [32, 83, 156, 147]},
+  {"id": "A2", "bbox": [156, 83, 279, 146]}
+]
+```
 
 ---
 
-## 4. How It Works (Project Explanation)
+## Occupancy Calculation
 
-1. **Model loading (`detector.py`)** — `ObjectDetector` loads a pretrained
-   YOLOv8 nano model (`yolov8n.pt`) once at startup using the `ultralytics`
-   library. YOLOv8n is the smallest variant of the YOLOv8 family — it
-   trades a little accuracy for speed, which is exactly what's needed for
-   real-time inference on a normal CPU.
+For each frame:
+1. YOLO11s detects vehicle bounding boxes (car, van, truck, bus only).
+2. Each detected vehicle is matched to its best-overlapping parking zone using a composite score: vehicle coverage (70%) + IoU (20%) + centre containment bonus (10%).
+3. Each vehicle is assigned to at most one zone, preventing a single large detection from occupying multiple adjacent spots.
+4. Each zone requires **3 consecutive frames** with a vehicle before becoming OCCUPIED, and **12 consecutive frames** without a vehicle before becoming FREE. This hysteresis prevents flickering from momentary detection failures.
 
-2. **Video capture (`camera.py`)** — `Camera` wraps `cv2.VideoCapture` and
-   exposes a simple `frames()` generator, so `main.py` can just do
-   `for frame in camera.frames():` without dealing with `read()`/`ret`
-   boilerplate. It also implements the context-manager protocol
-   (`with Camera(...) as cam:`) so the camera is always released properly.
-
-3. **Detection loop (`main.py`)** — For every frame captured:
-   - `detector.detect(frame)` runs a forward pass through the YOLOv8 model
-     and returns all detected objects (class, confidence, box coordinates).
-   - `detector.draw_detections(frame, results)` draws a bounding box and a
-     `class_name confidence` label for each detection.
-   - `FPSCounter.update()` (in `utils.py`) computes a smoothed FPS value
-     (a rolling average over the last 10 frames, so the number on screen
-     doesn't jitter wildly) which is overlaid in the corner.
-   - The frame is shown with `cv2.imshow`; the loop exits when the user
-     presses `q`.
-
-4. **Error handling** — Two custom exceptions keep failures readable:
-   - `ModelLoadError` — raised if the YOLO weights can't be loaded
-     (e.g. no internet on first run, corrupted file, missing dependency).
-   - `CameraError` — raised if the webcam/video file can't be opened
-     (e.g. no camera connected, wrong index, camera in use by another app).
-
-   Both are caught in `main.py` and printed as a clear, human-readable
-   message instead of a raw stack trace, and the program exits with a
-   non-zero status code so it plays nicely in scripts/CI.
+Zone colours:
+- 🟦 **Blue** — OCCUPIED
+- 🟩 **Green** — FREE
+- ⬜ **Grey** — UNKNOWN (not yet confirmed)
 
 ---
 
-## 5. Key Concepts to Know for an Interview
+## Vehicle Classes
 
-- **Why YOLOv8 nano?** It's a single-stage detector (predicts boxes and
-  classes in one forward pass, unlike two-stage detectors like Faster
-  R-CNN), which makes it fast enough for real-time video. "Nano" is the
-  smallest of the YOLOv8 size variants (n/s/m/l/x) — fewer parameters,
-  faster inference, slightly lower accuracy than larger variants.
-- **Why a generator for frames?** It keeps memory flat — one frame in
-  memory at a time — instead of loading an entire video into a list first.
-- **Why separate `detect()` and `draw_detections()`?** Single
-  Responsibility Principle — the raw detection results could be reused for
-  something other than drawing (e.g. counting objects, logging, triggering
-  an alert) without duplicating the inference call.
-- **Why a rolling-average FPS counter instead of instant FPS?** Instant
-  `1 / delta_time` is noisy frame-to-frame; averaging over a short window
-  gives a stable, readable number.
-- **Confidence threshold:** Detections below the threshold (default 0.5)
-  are filtered out by the model itself via the `conf` parameter, reducing
-  false positives shown on screen.
+The VisDrone model uses these class IDs (different from COCO):
+
+| Class ID | Class | Used? |
+|---|---|---|
+| 3 | car | ✅ |
+| 4 | van | ✅ |
+| 5 | truck | ✅ |
+| 8 | bus | ✅ |
+| 0,1,2,6,7,9,10 | pedestrian, people, bicycle, tricycle, awning-tricycle, motor, others | ❌ ignored |
 
 ---
 
-## 6. Possible Extensions (good talking points)
+## Logging
 
-- Save detections to a CSV/JSON log for analytics.
-- Add object tracking (e.g. ByteTrack, already supported by `ultralytics`)
-  to assign persistent IDs across frames instead of re-detecting from
-  scratch each frame.
-- Filter to specific classes only (e.g. only detect `person` and `car`).
-- Deploy as a Flask/FastAPI service streaming annotated frames over HTTP.
-- Swap `yolov8n.pt` for a custom-trained model on a domain-specific dataset.
+Every 30 seconds (configurable), a row is appended to a timestamped CSV in `logs/`:
 
----
+```
+timestamp,total_spots,occupied,free,occupancy_pct
+2026-08-08 18:49:00,69,55,14,79.7
+2026-08-08 18:49:30,69,52,17,75.4
+2026-08-08 18:50:00,69,54,15,78.3
+```
 
-## 7. Resume Bullet Points
-
-Use one or two of these, adapted to your own results/metrics where possible:
-
-- Built a real-time object detection system in Python using YOLOv8 and
-  OpenCV, achieving live webcam inference with on-screen FPS monitoring
-  and multi-class bounding box visualization.
-- Designed a modular, production-style architecture (camera capture, model
-  inference, and utility layers cleanly separated) enabling easy testing,
-  extension, and reuse of individual components.
-- Implemented robust error handling for hardware (camera) and model
-  loading failures, ensuring graceful degradation instead of crashes.
-- Applied a pretrained deep learning object detection model (YOLOv8) to a
-  live video stream, translating an ML model into a usable real-time
-  application.
+Application events are written to `logs/app.log` (rotating, max 5 MB, 3 backups).
 
 ---
 
-## 8. License / Credits
+## Current Performance
 
-- Object detection powered by [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics).
-- Video I/O and rendering powered by [OpenCV](https://opencv.org/).
+Tested on AMD Ryzen 5 7535HS (CPU only), 28-second parking lot video:
+
+| Metric | Value |
+|---|---|
+| Parking spots | 69 |
+| Typical occupied | 53–55 |
+| Typical free | 14–16 |
+| Typical occupancy | 77–80% |
+| Inference FPS | ~5–6 |
+
+---
+
+## Known Limitations
+
+- Two parking spots near the lot boundaries are occasionally misclassified due to partially visible vehicles. These edge cases were investigated and determined not worth fixing without retraining the model specifically on this camera angle.
+- CPU-only inference limits throughput to ~5–6 FPS. ONNX export or GPU deployment would significantly improve this.
+- The VisDrone model was not trained on this specific parking lot. Camera-specific fine-tuning would improve accuracy further.
+
+---
+
+## Future Improvements
+
+- Export model to ONNX/OpenVINO for 2–3× CPU speedup
+- Add ByteTrack vehicle tracking for temporal consistency
+- Web dashboard for live occupancy visualisation
+- Historical occupancy analytics and peak-hour reporting
+- Camera-specific fine-tuning on this parking lot's footage
+
+---
+
+## Technologies Used
+
+- Python 3.11
+- [Ultralytics YOLO11](https://docs.ultralytics.com/models/yolo11/) — object detection
+- [VisDrone2019-DET](https://github.com/VisDrone/VisDrone-Dataset) — aerial training dataset (model source)
+- OpenCV — video capture and rendering
+- NumPy — array operations
