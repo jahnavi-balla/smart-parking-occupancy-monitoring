@@ -196,7 +196,7 @@ The VisDrone model uses these class IDs (different from COCO):
 | 4 | van | Yes |
 | 5 | truck | Yes |
 | 8 | bus | Yes |
-| 0,1,2,6,7,9,10 | pedestrian, people, bicycle, tricycle, awning-tricycle, motor, others | ❌ ignored |
+| 0,1,2,6,7,9,10 | pedestrian, people, bicycle, tricycle, awning-tricycle, motor, others | ignored |
 
 ---
 
