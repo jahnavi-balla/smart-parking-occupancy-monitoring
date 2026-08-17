@@ -180,9 +180,9 @@ For each frame:
 4. Each zone requires **3 consecutive frames** with a vehicle before becoming OCCUPIED, and **12 consecutive frames** without a vehicle before becoming FREE. This hysteresis prevents flickering from momentary detection failures.
 
 Zone colours:
-- 🟦 **Blue** — OCCUPIED
-- 🟩 **Green** — FREE
-- ⬜ **Grey** — UNKNOWN (not yet confirmed)
+- **Blue** — OCCUPIED
+- **Green** — FREE
+- **Grey** — UNKNOWN (not yet confirmed)
 
 ---
 
@@ -192,10 +192,10 @@ The VisDrone model uses these class IDs (different from COCO):
 
 | Class ID | Class | Used? |
 |---|---|---|
-| 3 | car | ✅ |
-| 4 | van | ✅ |
-| 5 | truck | ✅ |
-| 8 | bus | ✅ |
+| 3 | car | Yes |
+| 4 | van | Yes |
+| 5 | truck | Yes |
+| 8 | bus | Yes |
 | 0,1,2,6,7,9,10 | pedestrian, people, bicycle, tricycle, awning-tricycle, motor, others | ❌ ignored |
 
 ---
