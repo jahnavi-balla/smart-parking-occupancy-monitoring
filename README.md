@@ -2,7 +2,7 @@
 
 A portfolio-quality computer vision project that monitors parking lot occupancy in real time from a fixed overhead camera, using a YOLO11s model fine-tuned on the VisDrone aerial dataset.
 
-![System output showing 69 parking spots with 53 occupied (77%) at 5.5 FPS](assets/demo_frame.png)
+![System output showing 69 parking spots with 53 occupied (77%) at 5.5 FPS](tools/Final_result_snap.png)
 
 ---
 
