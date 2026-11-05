@@ -109,8 +109,8 @@ smart-parking/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/smart-parking.git
-cd smart-parking
+git clone https://github.com/jahnavi-balla/smart-parking-occupancy-monitoring.git
+cd smart-parking-occupancy-monitoring
 
 # 2. Create a virtual environment
 python -m venv .venv
