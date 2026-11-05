@@ -20,7 +20,7 @@ Standard COCO-pretrained YOLO models are trained on street-level photography whe
 
 ## Why COCO YOLO Was Not Suitable
 
-COCO's vehicle annotations come from street-level images. The model's classification head learns to associate the "car" class with a distinctive front grille, side profile, and windscreen. Viewed from directly above, a car is just a rectangular roof with no visible grille or windows — the model finds no match to its training data and falls back to the nearest visually similar COCO class (boxy rectangles → kitchen appliances).
+During testing, the COCO-pretrained YOLOv8s model performed poorly on the overhead parking footage. Some parked vehicles were incorrectly classified as unrelated object classes, resulting in unreliable vehicle detections. This showed that a model trained on aerial imagery would be more suitable for this camera perspective.
 
 ---
 
@@ -57,24 +57,37 @@ The checkpoint (`models/visdrone_yol11s.pt`) is a publicly available pre-trained
 ## System Architecture
 
 ```
-Video / Camera
-      │
-      ▼
-  camera.py          — frame capture and release
-      │
-      ▼
-  detector.py        — YOLO11s inference → vehicle bounding boxes
-      │
-      ▼
-  parking.py         — IoU matching → FREE / OCCUPIED / UNKNOWN per spot
-      │
-      ├──▶ utils.py  — drawing helpers and HUD overlay
-      │
-      ▼
-  logger.py          — CSV occupancy logging
-      │
-      ▼
-  main.py            — orchestration, CLI, display loop
+                 Video / Webcam
+                       |
+                       v
+                   main.py
+                (Orchestration)
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+          camera.py          detector.py
+        (Frame capture)    (YOLO11s detection)
+                                 |
+                                 v
+                             parking.py
+                       (Vehicle-spot matching
+                        and occupancy states)
+                                 |
+                    +------------+------------+
+                    |                         |
+                    v                         v
+                 utils.py                  logger.py
+             (Drawing and HUD)          (CSV logging)
+                    |                         |
+                    v                         v
+               Display window              CSV files
+
+         tools/define_slots.py
+                  |
+                  v
+             assets/slots.json
+          (Parking zone coordinates)
 ```
 
 ---
@@ -82,7 +95,7 @@ Video / Camera
 ## Project Structure
 
 ```
-smart-parking/
+smart-parking-occupancy-monitoring/
 ├── src/
 │   ├── main.py              # Entry point
 │   ├── detector.py          # YOLO inference
@@ -200,7 +213,7 @@ The VisDrone model uses these class IDs (different from COCO):
 
 ## Logging
 
-Every 30 seconds (configurable), a row is appended to a timestamped CSV in `logs/`:
+Occupancy statistics are periodically recorded in timestamped CSV files. The logging interval is configurable through the --log-interval argument, which defaults to 30 seconds.
 
 ```
 timestamp,total_spots,occupied,free,occupancy_pct
@@ -229,7 +242,7 @@ Tested on AMD Ryzen 5 7535HS (CPU only), 28-second parking lot video:
 
 ## Known Limitations
 
-- Two parking spots near the lot boundaries are occasionally misclassified due to partially visible vehicles. These edge cases were investigated and determined not worth fixing without retraining the model specifically on this camera angle.
+- Parking spots near the boundaries of the camera view may occasionally be misclassified because some vehicles are only partially visible. Detection accuracy may improve with camera-specific model fine-tuning.
 - CPU-only inference limits throughput to ~5–6 FPS. ONNX export or GPU deployment would significantly improve this.
 - The VisDrone model was not trained on this specific parking lot. Camera-specific fine-tuning would improve accuracy further.
 
@@ -237,8 +250,7 @@ Tested on AMD Ryzen 5 7535HS (CPU only), 28-second parking lot video:
 
 ## Future Improvements
 
-- Export model to ONNX/OpenVINO for 2–3× CPU speedup
-- Add ByteTrack vehicle tracking for temporal consistency
+- Integrate ByteTrack for tracking individual vehicles across video frames.
 - Web dashboard for live occupancy visualisation
 - Historical occupancy analytics and peak-hour reporting
 - Camera-specific fine-tuning on this parking lot's footage
